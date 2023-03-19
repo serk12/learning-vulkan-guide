@@ -5,6 +5,39 @@
 
 #include <vk_types.h>
 #include <vector>
+#include <deque>
+#include <functional>
+
+struct DeletionQueue
+{
+	std::deque<std::function<void()>> deletors;
+
+	void pushFunction(std::function<void()> &&function_) {
+		deletors.push_back(function_);
+	}
+
+	void flush() {
+		for (auto it = deletors.rbegin(); it != deletors.rend(); ++it){
+			(*it)();
+		}
+		deletors.clear();
+	}
+};
+
+class PipelineBuilder {
+public:
+	std::vector<VkPipelineShaderStageCreateInfo> _shaderStages;
+	VkPipelineVertexInputStateCreateInfo _vertexInputInfo;
+	VkPipelineInputAssemblyStateCreateInfo _inputAssembly;
+	VkViewport _viewport;
+	VkRect2D _scissor;
+	VkPipelineRasterizationStateCreateInfo _rasterizer;
+	VkPipelineColorBlendAttachmentState _colorBlendAttachment;
+	VkPipelineMultisampleStateCreateInfo _multisampling;
+	VkPipelineLayout _pipelineLayout;
+
+	VkPipeline buildPipeline(VkDevice device_, VkRenderPass pass_);
+};
 
 class VulkanEngine {
 public:
@@ -30,10 +63,17 @@ public:
 	//mainloop semaphore/fence
 	VkSemaphore _presentSemaphore, _renderSemaphore;
 	VkFence _renderFence;
+	//pipeline
+	VkPipelineLayout _trianglePipelineLayout;
+	VkPipeline _trianglePipeline;
+	VkPipeline _redTrianglePipeline;
+	//deletor cleanup
+	DeletionQueue _mainDeletionQueue;
 
 
-	bool _isInitialized{ false };
-	int _frameNumber {0};
+	bool _isInitialized = false;
+	int _frameNumber = 0;
+	int _selectedShader = 0;
 
 	VkExtent2D _windowExtent{ 1700 , 900 };
 
@@ -57,4 +97,7 @@ private:
 	void initDefaultRenderpass();
 	void initFramebuffers();
 	void initSyncStructures();
+	void initPipeline();
+
+	bool loadShaderModule(const char* filePath_, VkShaderModule* outShaderModule_); 
 };
