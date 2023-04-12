@@ -7,6 +7,16 @@
 #include <vector>
 #include <deque>
 #include <functional>
+#include <glm/glm.hpp>
+#include <unordered_map>
+#include <string>
+
+#include "vk_mesh.h"
+
+struct MeshPushConstants {
+	glm::vec4 data;
+	glm::mat4 renderMatrix; 
+};
 
 struct DeletionQueue
 {
@@ -35,8 +45,20 @@ public:
 	VkPipelineColorBlendAttachmentState _colorBlendAttachment;
 	VkPipelineMultisampleStateCreateInfo _multisampling;
 	VkPipelineLayout _pipelineLayout;
+	VkPipelineDepthStencilStateCreateInfo _depthStencil;
 
 	VkPipeline buildPipeline(VkDevice device_, VkRenderPass pass_);
+};
+
+struct Material {
+	VkPipeline pipeline;
+	VkPipelineLayout pipelineLayout;
+};
+
+struct RenderObject {
+	Mesh* mesh;
+	Material* material;
+	glm::mat4 transformMatrix;
 };
 
 class VulkanEngine {
@@ -65,10 +87,25 @@ public:
 	VkFence _renderFence;
 	//pipeline
 	VkPipelineLayout _trianglePipelineLayout;
+	VkPipelineLayout _meshPipelineLayout;
 	VkPipeline _trianglePipeline;
 	VkPipeline _redTrianglePipeline;
+	VkPipeline _meshPipeline;
 	//deletor cleanup
 	DeletionQueue _mainDeletionQueue;
+	//GPU memory alocator
+	VmaAllocator _allocator;
+	//mesh
+	Mesh _triangleMesh;
+	Mesh _monkeyMesh;
+	//depth
+	VkImageView _depthImageView;
+	AllocatedImage _depthImage;
+	VkFormat _depthFormat;
+
+	std::vector<RenderObject> _renderables;
+	std::unordered_map<std::string,Material> _materials;
+	std::unordered_map<std::string,Mesh> _meshes;
 
 
 	bool _isInitialized = false;
@@ -90,6 +127,15 @@ public:
 
 	//run main loop
 	void run();
+
+	Material* createMaterial(VkPipeline pipeline, VkPipelineLayout layout,const std::string& name);
+	//returns nullptr if it can't be found
+	Material* getMaterial(const std::string& name);
+	//returns nullptr if it can't be found
+	Mesh* getMesh(const std::string& name);
+	//our draw function
+	void drawObjects(VkCommandBuffer cmd,RenderObject* first, int count);
+
 private:
 	void initVulkan();
 	void initSwapchain();
@@ -100,4 +146,8 @@ private:
 	void initPipeline();
 
 	bool loadShaderModule(const char* filePath_, VkShaderModule* outShaderModule_); 
+	void loadMeshes();
+	void initScene();
+
+	void uploadMesh(Mesh &mesh_);
 };
