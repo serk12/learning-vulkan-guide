@@ -6,7 +6,7 @@
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 
-struct AllocatorBuffer {
+struct AllocatedBuffer {
 	VkBuffer _buffer;
 	VmaAllocation _allocation;
 };

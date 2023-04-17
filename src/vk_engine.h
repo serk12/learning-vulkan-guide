@@ -13,6 +13,7 @@
 
 #include "vk_mesh.h"
 
+
 struct MeshPushConstants {
 	glm::vec4 data;
 	glm::mat4 renderMatrix; 
@@ -61,6 +62,44 @@ struct RenderObject {
 	glm::mat4 transformMatrix;
 };
 
+struct FrameData {
+	//mainloop semaphore/fence
+	VkSemaphore _presentSemaphore, _renderSemaphore;
+	VkFence _renderFence;
+
+	VkCommandPool _commandPool;					// the command pool for our commands
+	VkCommandBuffer _mainCommandBuffer;			// the buffer to record into
+
+	AllocatedBuffer _cameraBuffer;
+	VkDescriptorSet _globalDescriptor;
+
+	AllocatedBuffer _objectBuffer;
+	VkDescriptorSet _objectDescriptor;
+};
+
+struct GPUCameraData {
+	glm::mat4 view;
+	glm::mat4 proj;
+	glm::mat4 viewproj;
+};
+
+struct GPUSceneData {
+	glm::vec4 fogColor; // w is for exponent
+	glm::vec4 fogDistance; // x for min, y for max, zw unused
+	glm::vec4 ambientColor;
+	glm::vec4 sunlightDirection; // w for sun power
+	glm::vec4 sunlightColor;
+};
+
+struct GPUObjectData{
+	glm::mat4 modelMatrix;
+};
+
+
+constexpr unsigned int FRAME_OVERLAP = 2;
+constexpr unsigned int MAX_OBJECTS = 10000;
+
+
 class VulkanEngine {
 public:
 	//Vulkan instance, debug and device
@@ -77,14 +116,9 @@ public:
 	//vulkan commands
 	VkQueue _graphicsQueue;						// queue to submit requests
 	uint32_t _graphicsQueueFamily;				// family of that queue
-	VkCommandPool _commandPool;					// the command pool for our commands
-	VkCommandBuffer _mainCommandBuffer;			// the buffer to record into
 	//vlukna renderpass
 	VkRenderPass _renderPass;
 	std::vector<VkFramebuffer> _frameBuffers;
-	//mainloop semaphore/fence
-	VkSemaphore _presentSemaphore, _renderSemaphore;
-	VkFence _renderFence;
 	//pipeline
 	VkPipelineLayout _trianglePipelineLayout;
 	VkPipelineLayout _meshPipelineLayout;
@@ -102,15 +136,26 @@ public:
 	VkImageView _depthImageView;
 	AllocatedImage _depthImage;
 	VkFormat _depthFormat;
+	VkPhysicalDeviceProperties _gpuProperties;
+
+	VkDescriptorSetLayout _globalSetLayout;	
+	VkDescriptorSetLayout _objectSetLayout;
+	VkDescriptorPool _descriptorPool;
+
 
 	std::vector<RenderObject> _renderables;
 	std::unordered_map<std::string,Material> _materials;
 	std::unordered_map<std::string,Mesh> _meshes;
 
+	FrameData _frames[FRAME_OVERLAP];
+
 
 	bool _isInitialized = false;
 	int _frameNumber = 0;
 	int _selectedShader = 0;
+
+	GPUSceneData _sceneParameters;
+	AllocatedBuffer _sceneParameterBuffer;
 
 	VkExtent2D _windowExtent{ 1700 , 900 };
 
@@ -135,6 +180,7 @@ public:
 	Mesh* getMesh(const std::string& name);
 	//our draw function
 	void drawObjects(VkCommandBuffer cmd,RenderObject* first, int count);
+	FrameData& getCurrentFrame();
 
 private:
 	void initVulkan();
@@ -144,10 +190,12 @@ private:
 	void initFramebuffers();
 	void initSyncStructures();
 	void initPipeline();
+	AllocatedBuffer createBuffer(size_t allocSize_, VkBufferUsageFlags usage_, VmaMemoryUsage memoryUsage_);
+	void initDescriptors();
 
 	bool loadShaderModule(const char* filePath_, VkShaderModule* outShaderModule_); 
 	void loadMeshes();
 	void initScene();
-
+	size_t padUniformBufferSize(size_t originalSize);
 	void uploadMesh(Mesh &mesh_);
 };
