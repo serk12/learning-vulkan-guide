@@ -7,6 +7,7 @@
 #include <vk_initializers.h>
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
+#include <vk_textures.h>
 
 #include <iostream>
 #include <fstream>
@@ -97,6 +98,9 @@ void VulkanEngine::init()
 	initSyncStructures();
 	initDescriptors();
 	initPipeline();
+	std::cout << "loading" << std::endl;
+	loadImages();
+	std::cout << "loading" << std::endl;
 	loadMeshes();
 	initScene();
 	//everything went fine
@@ -108,7 +112,9 @@ void VulkanEngine::initDescriptors()
 	std::vector<VkDescriptorPoolSize> sizes = { 
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10 },
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 10 },
-		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 }
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 },
+		//add combined-image-sampler descriptor types to the pool
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 10 }
 	};
 	VkDescriptorPoolCreateInfo poolInfo = {};
 	poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -142,6 +148,17 @@ void VulkanEngine::initDescriptors()
 	VkDescriptorSetLayoutBinding bindings[] = { camBufferBinding,sceneBind };
 	setinfo.pBindings = &bindings[0];
 	vkCreateDescriptorSetLayout(_device, &setinfo, nullptr, &_globalSetLayout);
+
+	VkDescriptorSetLayoutBinding textureBind = vkinit::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+
+	VkDescriptorSetLayoutCreateInfo set3info = {};
+	set3info.bindingCount = 1;
+	set3info.flags = 0;
+	set3info.pNext = nullptr;
+	set3info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	set3info.pBindings = &textureBind;
+
+	vkCreateDescriptorSetLayout(_device, &set3info, nullptr, &_singleTextureSetLayout);
 
 
 	const size_t sceneParamBufferSize = FRAME_OVERLAP * padUniformBufferSize(sizeof(GPUSceneData));
@@ -289,6 +306,15 @@ void VulkanEngine::initSwapchain()
 
 void VulkanEngine::initCommands()
 {
+	VkCommandPoolCreateInfo uploadCommandPoolInfo = vkinit::command_pool_create_info(_graphicsQueueFamily);
+	VK_CHECK(vkCreateCommandPool(_device, &uploadCommandPoolInfo, nullptr, &_uploadContext._commandPool));
+	_mainDeletionQueue.pushFunction([=]() {
+		vkDestroyCommandPool(_device, _uploadContext._commandPool, nullptr);
+	});
+	VkCommandBufferAllocateInfo cmdAllocInfo = vkinit::command_buffer_allocate_info(_uploadContext._commandPool, 1);
+	VkCommandBuffer cmd;
+	VK_CHECK(vkAllocateCommandBuffers(_device, &cmdAllocInfo, &_uploadContext._commandBuffer));
+
 	VkCommandPoolCreateInfo commandPoolInfo = vkinit::command_pool_create_info(_graphicsQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
 	
 	for (int i = 0; i < FRAME_OVERLAP; ++i) {
@@ -420,6 +446,12 @@ void VulkanEngine::initFramebuffers()
 
 void VulkanEngine::initSyncStructures()
 {
+	VkFenceCreateInfo uploadFenceCreateInfo = vkinit::fence_create_info();
+	VK_CHECK(vkCreateFence(_device, &uploadFenceCreateInfo, nullptr, &_uploadContext._uploadFence));
+	_mainDeletionQueue.pushFunction([=]() {
+		vkDestroyFence(_device, _uploadContext._uploadFence, nullptr);
+	});
+
 	VkFenceCreateInfo fenceCreateInfo = vkinit::fence_create_info(VK_FENCE_CREATE_SIGNALED_BIT);
 	VkSemaphoreCreateInfo semaphoreCreateInfo = vkinit::semaphore_create_info();
 	for (int i = 0; i < FRAME_OVERLAP; ++i) {
@@ -535,6 +567,7 @@ void VulkanEngine::initPipeline()
 	} else {
 		std::cout << "mesh fragment shader successfully loaded" << std::endl;
 	}
+	/*
     pipelineBuilder._shaderStages.clear();
 	pipelineBuilder._shaderStages.push_back(vkinit::pipeline_shader_stage_create_info(
 												VK_SHADER_STAGE_VERTEX_BIT, meshVertexShader));
@@ -545,6 +578,30 @@ void VulkanEngine::initPipeline()
 	_meshPipeline = pipelineBuilder.buildPipeline(_device, _renderPass);
 
 	createMaterial(_meshPipeline, _meshPipelineLayout, "defaultmesh");
+	*/
+	//connect the new pipeline layout to the pipeline builder
+
+	VkPipelineLayoutCreateInfo textured_pipeline_layout_info = meshPipelineLayoutInfo;
+
+	VkDescriptorSetLayout texturedSetLayouts[] = { _globalSetLayout, _objectSetLayout,_singleTextureSetLayout };
+
+	textured_pipeline_layout_info.setLayoutCount = 3;
+	textured_pipeline_layout_info.pSetLayouts = texturedSetLayouts;
+
+	VkPipelineLayout _texturedPipeLayout;
+	VK_CHECK(vkCreatePipelineLayout(_device, &textured_pipeline_layout_info, nullptr, &_texturedPipeLayout));
+
+	pipelineBuilder._shaderStages.clear();
+	pipelineBuilder._shaderStages.push_back(
+		vkinit::pipeline_shader_stage_create_info(VK_SHADER_STAGE_VERTEX_BIT, meshVertexShader));
+
+	pipelineBuilder._shaderStages.push_back(
+		vkinit::pipeline_shader_stage_create_info(VK_SHADER_STAGE_FRAGMENT_BIT, meshFragShader));
+
+	pipelineBuilder._pipelineLayout = _texturedPipeLayout;
+	VkPipeline texPipeline = pipelineBuilder.buildPipeline(_device, _renderPass);
+	createMaterial(texPipeline, _texturedPipeLayout, "texturedmesh");
+
 
 	vkDestroyShaderModule(_device, triangleFragShader, nullptr);
 	vkDestroyShaderModule(_device, triangleVertShader, nullptr);
@@ -566,6 +623,7 @@ void VulkanEngine::initPipeline()
 
 void VulkanEngine::loadMeshes() 
 {
+	/*
 	_triangleMesh._vertices.resize(3);
 	_triangleMesh._vertices[0].position = { 1.f, 1.f, 0.0f };
 	_triangleMesh._vertices[1].position = {-1.f, 1.f, 0.0f };
@@ -582,10 +640,17 @@ void VulkanEngine::loadMeshes()
 
 	_meshes["monkey"] = _monkeyMesh;
 	_meshes["triangle"] = _triangleMesh;
+	*/
+	Mesh lostEmpire{};
+	lostEmpire.loadFromObj("../assets/lost_empire.obj");
+	uploadMesh(lostEmpire);
+	_meshes["empire"] = lostEmpire;
+
 }
 
 void VulkanEngine::initScene()
 {
+	/*
 	RenderObject monkey;
 	monkey.mesh = getMesh("monkey");
 	monkey.material = getMaterial("defaultmesh");
@@ -606,29 +671,98 @@ void VulkanEngine::initScene()
 			_renderables.push_back(tri);
 		}
 	}
+	*/
+
+	RenderObject map;
+	map.mesh = getMesh("empire");
+	map.material = getMaterial("texturedmesh");
+	map.transformMatrix = glm::translate(glm::vec3{ 5,-10,0 });
+
+	_renderables.push_back(map);
+
+	//create a sampler for the texture
+	VkSamplerCreateInfo samplerInfo = vkinit::sampler_create_info(VK_FILTER_NEAREST);
+
+	VkSampler blockySampler;
+	vkCreateSampler(_device, &samplerInfo, nullptr, &blockySampler);
+
+
+
+	Material* texturedMat =	getMaterial("texturedmesh");
+
+	//allocate the descriptor set for single-texture to use on the material
+	VkDescriptorSetAllocateInfo allocInfo = {};
+	allocInfo.pNext = nullptr;
+	allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+	allocInfo.descriptorPool = _descriptorPool;
+	allocInfo.descriptorSetCount = 1;
+	allocInfo.pSetLayouts = &_singleTextureSetLayout;
+
+	vkAllocateDescriptorSets(_device, &allocInfo, &texturedMat->textureSet);
+
+	//write to the descriptor set so that it points to our empire_diffuse texture
+	VkDescriptorImageInfo imageBufferInfo;
+	imageBufferInfo.sampler = blockySampler;
+	imageBufferInfo.imageView = _loadedTextures["empire_diffuse"].imageView;
+	imageBufferInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+	VkWriteDescriptorSet texture1 = vkinit::write_descriptor_image(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, texturedMat->textureSet, &imageBufferInfo, 0);
+
+	vkUpdateDescriptorSets(_device, 1, &texture1, 0, nullptr);
+
 }
 
 
 void VulkanEngine::uploadMesh(Mesh& mesh_) 
 {
-	VkBufferCreateInfo bufferInfo = {};
-	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	bufferInfo.size = mesh_._vertices.size() * sizeof(Vertex);
-	bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+	const size_t bufferSize = mesh_._vertices.size() * sizeof(Vertex);
+	VkBufferCreateInfo stagingBufferInfo = {};
+	stagingBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	stagingBufferInfo.pNext = nullptr;
 
-	VmaAllocationCreateInfo vmaAllocationInfo = {};
-	vmaAllocationInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+	stagingBufferInfo.size = bufferSize;
+	stagingBufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
-	VK_CHECK(vmaCreateBuffer(_allocator, &bufferInfo, &vmaAllocationInfo, 
-								&mesh_._vertexBuffer._buffer, &mesh_._vertexBuffer._allocation, nullptr));
+	VmaAllocationCreateInfo vmaallocInfo = {};
+	vmaallocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+	AllocatedBuffer stagingBuffer;
+	VK_CHECK(vmaCreateBuffer(_allocator, &stagingBufferInfo, &vmaallocInfo, 
+			&stagingBuffer._buffer, &stagingBuffer._allocation, nullptr));
+
+	void* data;
+	vmaMapMemory(_allocator, stagingBuffer._allocation, &data);
+	memcpy(data, mesh_._vertices.data(), mesh_._vertices.size() * sizeof(Vertex));
+	vmaUnmapMemory(_allocator, stagingBuffer._allocation);
+
+	VkBufferCreateInfo vertexBufferInfo = {};
+	vertexBufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	vertexBufferInfo.pNext = nullptr;
+	//this is the total size, in bytes, of the buffer we are allocating
+	vertexBufferInfo.size = bufferSize;
+	//this buffer is going to be used as a Vertex Buffer
+	vertexBufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+	//let the VMA library know that this data should be GPU native
+	vmaallocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+	//allocate the buffer
+	VK_CHECK(vmaCreateBuffer(_allocator, &vertexBufferInfo, &vmaallocInfo,
+		&mesh_._vertexBuffer._buffer,
+		&mesh_._vertexBuffer._allocation,
+		nullptr));
+	immediateSubmit([=](VkCommandBuffer cmd) {
+		VkBufferCopy copy;
+		copy.dstOffset = 0;
+		copy.srcOffset = 0;
+		copy.size = bufferSize;
+		vkCmdCopyBuffer(cmd, stagingBuffer._buffer, mesh_._vertexBuffer._buffer, 1, &copy);
+	});
+
 	_mainDeletionQueue.pushFunction([=]() {
 		vmaDestroyBuffer(_allocator, mesh_._vertexBuffer._buffer, mesh_._vertexBuffer._allocation);
 	});
-
-	void* data;
-	vmaMapMemory(_allocator, mesh_._vertexBuffer._allocation, &data);
-	memcpy(data, mesh_._vertices.data(), mesh_._vertices.size() * sizeof(Vertex));
-	vmaUnmapMemory(_allocator, mesh_._vertexBuffer._allocation);
+	vmaDestroyBuffer(_allocator, stagingBuffer._buffer, stagingBuffer._allocation);
 }
 
 bool VulkanEngine::loadShaderModule(const char* filePath_, VkShaderModule* outShaderModule_)
@@ -835,6 +969,7 @@ void VulkanEngine::drawObjects(VkCommandBuffer cmd, RenderObject* first, int cou
 	glm::mat4 projection = glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.0f);
 	projection[1][1] *= -1;
 
+
 	GPUCameraData camData {projection, view, projection * view};
 	void* data;
 	vmaMapMemory(_allocator, getCurrentFrame()._cameraBuffer._allocation, &data);
@@ -851,7 +986,8 @@ void VulkanEngine::drawObjects(VkCommandBuffer cmd, RenderObject* first, int cou
 
 	Mesh* lastMesh = nullptr;
 	Material* lastMaterial = nullptr;
-	for (int i = 0; i < count; i++)
+
+	for (int i = 0; i < count; ++i)
 	{
 		RenderObject& object = first[i];
 
@@ -863,7 +999,12 @@ void VulkanEngine::drawObjects(VkCommandBuffer cmd, RenderObject* first, int cou
 			uint32_t uniformOffset = padUniformBufferSize(sizeof(GPUSceneData)) * frameIndex;
 			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout, 0, 1, &getCurrentFrame()._globalDescriptor, 1, &uniformOffset);
 			vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout, 1, 1, &getCurrentFrame()._objectDescriptor, 0, nullptr);
+			if (object.material->textureSet != VK_NULL_HANDLE) {
+				//texture descriptor
+				vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout, 2, 1, &object.material->textureSet, 0, nullptr);
+			}
 		}
+
 
 		MeshPushConstants constants;
 		constants.renderMatrix = object.transformMatrix;
@@ -911,4 +1052,31 @@ size_t VulkanEngine::padUniformBufferSize(size_t originalSize)
 		alignedSize = (alignedSize + minUboAlignment - 1) & ~(minUboAlignment - 1);
 	}
 	return alignedSize;
+}
+
+
+void VulkanEngine::immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function)
+{
+	VkCommandBuffer cmd = _uploadContext._commandBuffer;
+	VkCommandBufferBeginInfo cmdBeginInfo = vkinit::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+	VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
+	function(cmd);
+	VK_CHECK(vkEndCommandBuffer(cmd));
+	VkSubmitInfo submit = vkinit::submit_info(&cmd);
+	VK_CHECK(vkQueueSubmit(_graphicsQueue, 1, &submit, _uploadContext._uploadFence));
+	vkWaitForFences(_device, 1, &_uploadContext._uploadFence, true, 9999999999);
+	vkResetFences(_device, 1, &_uploadContext._uploadFence);
+	vkResetCommandPool(_device, _uploadContext._commandPool, 0);
+}
+
+void VulkanEngine::loadImages()
+{
+	Texture lostEmpire;
+
+	vkutil::load_image_from_file(*this, "../assets/lost_empire-RGBA.png", lostEmpire.image);
+
+	VkImageViewCreateInfo imageinfo = vkinit::imageview_create_info(VK_FORMAT_R8G8B8A8_SRGB, lostEmpire.image._image, VK_IMAGE_ASPECT_COLOR_BIT);
+	vkCreateImageView(_device, &imageinfo, nullptr, &lostEmpire.imageView);
+
+	_loadedTextures["empire_diffuse"] = lostEmpire;
 }

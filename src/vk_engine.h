@@ -14,6 +14,13 @@
 #include "vk_mesh.h"
 
 
+
+struct Material {
+	VkDescriptorSet textureSet{VK_NULL_HANDLE}; //texture defaulted to null
+	VkPipeline pipeline;
+	VkPipelineLayout pipelineLayout;
+};
+
 struct MeshPushConstants {
 	glm::vec4 data;
 	glm::mat4 renderMatrix; 
@@ -49,11 +56,6 @@ public:
 	VkPipelineDepthStencilStateCreateInfo _depthStencil;
 
 	VkPipeline buildPipeline(VkDevice device_, VkRenderPass pass_);
-};
-
-struct Material {
-	VkPipeline pipeline;
-	VkPipelineLayout pipelineLayout;
 };
 
 struct RenderObject {
@@ -95,6 +97,19 @@ struct GPUObjectData{
 	glm::mat4 modelMatrix;
 };
 
+struct UploadContext {
+	VkFence _uploadFence;
+	VkCommandPool _commandPool;
+	VkCommandBuffer _commandBuffer;
+};
+
+struct Texture {
+	AllocatedImage image;
+	VkImageView imageView;
+};
+
+
+
 
 constexpr unsigned int FRAME_OVERLAP = 2;
 constexpr unsigned int MAX_OBJECTS = 10000;
@@ -122,6 +137,9 @@ public:
 	//pipeline
 	VkPipelineLayout _trianglePipelineLayout;
 	VkPipelineLayout _meshPipelineLayout;
+	VkPipelineLayout _texturedPipeLayout;
+	VkDescriptorSetLayout _singleTextureSetLayout;
+
 	VkPipeline _trianglePipeline;
 	VkPipeline _redTrianglePipeline;
 	VkPipeline _meshPipeline;
@@ -142,6 +160,9 @@ public:
 	VkDescriptorSetLayout _objectSetLayout;
 	VkDescriptorPool _descriptorPool;
 
+	UploadContext _uploadContext;
+
+	std::unordered_map<std::string, Texture> _loadedTextures;
 
 	std::vector<RenderObject> _renderables;
 	std::unordered_map<std::string,Material> _materials;
@@ -181,6 +202,9 @@ public:
 	//our draw function
 	void drawObjects(VkCommandBuffer cmd,RenderObject* first, int count);
 	FrameData& getCurrentFrame();
+	void immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function);
+	AllocatedBuffer createBuffer(size_t allocSize_, VkBufferUsageFlags usage_, VmaMemoryUsage memoryUsage_);
+
 
 private:
 	void initVulkan();
@@ -190,11 +214,11 @@ private:
 	void initFramebuffers();
 	void initSyncStructures();
 	void initPipeline();
-	AllocatedBuffer createBuffer(size_t allocSize_, VkBufferUsageFlags usage_, VmaMemoryUsage memoryUsage_);
 	void initDescriptors();
 
 	bool loadShaderModule(const char* filePath_, VkShaderModule* outShaderModule_); 
 	void loadMeshes();
+	void loadImages();
 	void initScene();
 	size_t padUniformBufferSize(size_t originalSize);
 	void uploadMesh(Mesh &mesh_);
